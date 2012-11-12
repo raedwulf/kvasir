@@ -158,6 +158,8 @@ class Kvasir(object):
                     author=info['Author'], content=text,
                     path=pdf.filename, type=u'article')
                 self.__writer.commit()
+    def list(self):
+        pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
@@ -166,12 +168,29 @@ if __name__ == "__main__":
     add_action.add_argument('items', metavar='P', type=str, nargs='+',
             help='list of items to add')
     add_action.add_argument('-r', '--recursive', action='store_true', help='recursively add documents in path with extension ps or pdf')
-    #add_action.add_argument('-t', '--title', action='store_const', help='title metadata')
+    add_action.set_defaults(which='add')
+
+    tag_action = subparsers.add_parser('tag', help='tag details of the document')
+    tag_action.add_argument('-t', '--title', action='store_const', const=str, default='', help='title metadata')
+    tag_action.add_argument('-a', '--author', action='store_const', const=str, default='', help='author metadata')
+    tag_action.set_defaults(which='tag')
+
     remove_action = subparsers.add_parser('remove', help='remove local documents from previous search')
+    remove_action.set_defaults(which='remove')
+
     search_action = subparsers.add_parser('search', help='search the web for documents')
+    search_action.set_defaults(which='search')
+
     list_action = subparsers.add_parser('list', help='print out information')
     list_action.add_argument('-s', '--search', action='store_true', help='print last search result')
+    list_action.set_defaults(which='list')
+
     args = parser.parse_args()
 
     k = Kvasir()
-    k.add(args.items)
+    if args.which == 'add':
+        k.add(args.items)
+    elif args.which == 'list':
+        k.list()
+    else:
+        sys.exit('error: unknown action ' + args.which)
