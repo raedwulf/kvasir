@@ -28,6 +28,7 @@ import sys
 import latex
 import shutil
 import subprocess
+import ConfigParser
 from string import lstrip, split
 
 from whoosh.index import create_in
@@ -62,6 +63,30 @@ class PDF(object):
             stderr=subprocess.STDOUT)
         return unicode(data, 'utf-8')
 
+class State(object):
+    def __init__(self, filename):
+        self.config = ConfigParser.ConfigParser()
+        self.filename = filename
+        self.__read_config()
+    def __read_config(self):
+        if os.path.exists(self.filename):
+            self.config.read(self.filename)
+            if self.config.has_section('STATE'):
+                return
+        with open(self.filename, 'wb') as configfile:
+            self.config.add_section('STATE')
+            self.config.write(configfile)
+    def __getitem__(self, key):
+        if self.config.has_option('STATE', key):
+            return self.config.get('STATE', key, True)
+        else:
+            return None
+    def __setitem__(self, key, value):
+        assert type(value) is str or type(value) is long or type(value) is int or type(value) is float, 'invalid type for config value'
+        self.config.set('STATE', key, value)
+        with open(self.filename, 'wb') as configfile:
+            self.config.write(configfile)
+
 class Kvasir(object):
     def __init__(self):
         # create the configuration path
@@ -79,6 +104,8 @@ class Kvasir(object):
         self.__index_path = self.__config_path + os.sep + 'index'
         if not os.path.exists(self.__index_path):
             os.mkdir(self.__index_path)
+        self.__state_path = self.__config_path + os.sep + 'state'
+        self.__state = State(self.__state_path)
         # create whoosh's schema (basically bibtex fields)
         self.__schema = Schema(
             entry=STORED,
@@ -124,6 +151,7 @@ class Kvasir(object):
                     sys.exit('error: ' + d + ' does not exist.')
                 filename = self.__udoc_path + os.sep + os.path.basename(d)
                 pdf = PDF(filename)
+                self.__state['current_filename'] = filename
                 info = pdf.info()
                 text = pdf.text()
                 self.__writer.add_document(title=info['Title'],
