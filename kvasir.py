@@ -26,25 +26,59 @@ import exceptions
 import os
 import sys
 import latex
+import shutil
+import subprocess
+from string import lstrip, split
 
 from whoosh.index import create_in
 from whoosh.fields import *
 
-#from pdfminer.pdfparser import PDFParser, PDFDocument
-#from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
-#from pdfminer.pdfdevice import PDFDevice
+def has_command(cmd):
+    devnull = os.open(os.devnull, os.O_RDWR)
+    subprocess.check_call('which ' + cmd + ' && exit 0', stdout=devnull,
+        stderr=devnull, shell=True) == 0, 'pdftotext command not available'
+    os.close(devnull)
+
+class PDF(object):
+    def __init__(self, filename):
+        has_command('pdftotext')
+        has_command('pdfinfo')
+        if os.path.exists(filename) and os.path.isfile(filename):
+            self.filename = unicode(filename)
+        else:
+            sys.exit('error: ' + d + ' is not a file.')
+    def info(self):
+        data = subprocess.check_output(['pdfinfo', self.filename],
+            stderr=subprocess.STDOUT)
+        result = {}
+        for l in split(data, '\n'):
+            if l.find(':') != -1:
+                f, v = split(l, ':', 1)
+                v = lstrip(v)
+                result[unicode(f)] = unicode(v)
+        return result
+    def text(self):
+        data = subprocess.check_output(['pdftotext', '-enc', 'UTF-8', self.filename, '-'],
+            stderr=subprocess.STDOUT)
+        return unicode(data, 'utf-8')
 
 class Kvasir(object):
     def __init__(self):
         # create the configuration path
-        config_path = os.environ['HOME'] + os.sep + '.kvasir'
-        if not os.path.exists(config_path):
-            os.mkdir(config_path)
-        elif not os.path.isdir(config_path):
-            sys.exit('error: ' + config_path + ' config path is not a directory.')
-        index_path = config_path + os.sep + 'index'
-        if not os.path.exists(index_path):
-            os.mkdir(index_path)
+        self.__config_path = os.environ['HOME'] + os.sep + '.kvasir'
+        if not os.path.exists(self.__config_path):
+            os.mkdir(self.__config_path)
+        elif not os.path.isdir(self.__config_path):
+            sys.exit('error: ' + self.__config_path + ' config path is not a directory.')
+        self.__doc_path = self.__config_path + os.sep + 'doc'
+        if not os.path.exists(self.__doc_path):
+            os.mkdir(self.__doc_path)
+        self.__udoc_path = self.__config_path + os.sep + 'doc' + os.sep + 'unknown'
+        if not os.path.exists(self.__udoc_path):
+            os.mkdir(self.__udoc_path)
+        self.__index_path = self.__config_path + os.sep + 'index'
+        if not os.path.exists(self.__index_path):
+            os.mkdir(self.__index_path)
         # create whoosh's schema (basically bibtex fields)
         self.__schema = Schema(
             entry=STORED,
@@ -75,14 +109,27 @@ class Kvasir(object):
             keywords=KEYWORD(scorable=True),
             unpublished=BOOLEAN)
         # create the index
-        ix = create_in(index_path, schema)
+        self.__index = create_in(self.__index_path, self.__schema)
+        self.__writer = self.__index.writer()
     def add(self, documents):
         for d in documents:
             try:
                 index = int(d)
                 # check state
+                # find download through gscholar
             except exceptions.ValueError:
-                pass
+                if os.path.exists(d):
+                    shutil.copyfile(d, self.__udoc_path + os.sep + os.path.basename(d))
+                else:
+                    sys.exit('error: ' + d + ' does not exist.')
+                filename = self.__udoc_path + os.sep + os.path.basename(d)
+                pdf = PDF(filename)
+                info = pdf.info()
+                text = pdf.text()
+                self.__writer.add_document(title=info['Title'],
+                    author=info['Author'], content=text,
+                    path=pdf.filename, type=u'article')
+                self.__writer.commit()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
