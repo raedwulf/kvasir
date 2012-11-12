@@ -31,8 +31,10 @@ import subprocess
 import ConfigParser
 from string import lstrip, split
 
-from whoosh.index import create_in
+import whoosh.index as index
 from whoosh.fields import *
+from whoosh.qparser import QueryParser
+
 
 def has_command(cmd):
     devnull = os.open(os.devnull, os.O_RDWR)
@@ -49,14 +51,14 @@ class PDF(object):
         else:
             sys.exit('error: ' + d + ' is not a file.')
     def info(self):
-        data = subprocess.check_output(['pdfinfo', self.filename],
+        data = subprocess.check_output(['pdfinfo', '-enc', 'UTF-8', self.filename],
             stderr=subprocess.STDOUT)
         result = {}
         for l in split(data, '\n'):
             if l.find(':') != -1:
                 f, v = split(l, ':', 1)
                 v = lstrip(v)
-                result[unicode(f)] = unicode(v)
+                result[unicode(f, 'utf-8')] = unicode(v, 'utf-8')
         return result
     def text(self):
         data = subprocess.check_output(['pdftotext', '-enc', 'UTF-8', self.filename, '-'],
@@ -87,6 +89,23 @@ class State(object):
         with open(self.filename, 'wb') as configfile:
             self.config.write(configfile)
 
+class Tree(object):
+    def __init__(self, name, *children):
+        self.name = name
+        self.children = children
+
+        def __str__(self):
+            return '\n'.join(self.tree_lines())
+
+        def tree_lines(self):
+            yield self.name
+            last = self.children[-1] if self.children else None
+            for child in self.children:
+                prefix = '`-' if child is last else '+-'
+                for line in child.tree_lines():
+                    yield prefix + line
+                    prefix = '  ' if child is last else '| '
+
 class Kvasir(object):
     def __init__(self):
         # create the configuration path
@@ -101,9 +120,6 @@ class Kvasir(object):
         self.__udoc_path = self.__config_path + os.sep + 'doc' + os.sep + 'unknown'
         if not os.path.exists(self.__udoc_path):
             os.mkdir(self.__udoc_path)
-        self.__index_path = self.__config_path + os.sep + 'index'
-        if not os.path.exists(self.__index_path):
-            os.mkdir(self.__index_path)
         self.__state_path = self.__config_path + os.sep + 'state'
         self.__state = State(self.__state_path)
         # create whoosh's schema (basically bibtex fields)
@@ -136,7 +152,15 @@ class Kvasir(object):
             keywords=KEYWORD(scorable=True),
             unpublished=BOOLEAN)
         # create the index
-        self.__index = create_in(self.__index_path, self.__schema)
+        self.__index_path = self.__config_path + os.sep + 'index'
+        if os.path.exists(self.__index_path):
+            try:
+                self.__index = index.open_dir(self.__index_path)
+            except index.EmptyIndexError:
+                self.__index = index.create_in(self.__index_path, self.__schema)
+        else:
+            os.mkdir(self.__index_path)
+            self.__index = index.create_in(self.__index_path, self.__schema)
         self.__writer = self.__index.writer()
     def add(self, documents):
         for d in documents:
@@ -154,12 +178,24 @@ class Kvasir(object):
                 self.__state['current_filename'] = filename
                 info = pdf.info()
                 text = pdf.text()
-                self.__writer.add_document(title=info['Title'],
-                    author=info['Author'], content=text,
-                    path=pdf.filename, type=u'article')
+                title = info[u'Title'] if u'Title' in info else unicode(os.path.basename(d))
+                author = info[u'Author'] if u'Author' in info else u'Unknown'
+                self.__writer.add_document(title=title, author=author,
+                    content=text, path=pdf.filename, type=u'article')
                 self.__writer.commit()
     def list(self):
-        pass
+        with self.__index.searcher() as s:
+            for fields in s.all_stored_fields():
+                yield fields['path']
+    def search(self, qs):
+        qp = QueryParser("content", schema=self.__index.schema)
+        q = qp.parse(qs)
+
+        with self.__index.searcher() as s:
+            results = s.search(q)
+            for r in results:
+                print r
+        return results
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
@@ -191,6 +227,7 @@ if __name__ == "__main__":
     if args.which == 'add':
         k.add(args.items)
     elif args.which == 'list':
-        k.list()
+        for l in k.list():
+            print l
     else:
         sys.exit('error: unknown action ' + args.which)
