@@ -92,19 +92,19 @@ class State(object):
 class Tree(object):
     def __init__(self, name, *children):
         self.name = name
-        self.children = children
+        self.children = list(children)
 
-        def __str__(self):
-            return '\n'.join(self.tree_lines())
+    def __str__(self):
+        return '\n'.join(self.tree_lines())
 
-        def tree_lines(self):
-            yield self.name
-            last = self.children[-1] if self.children else None
-            for child in self.children:
-                prefix = '`-' if child is last else '+-'
-                for line in child.tree_lines():
-                    yield prefix + line
-                    prefix = '  ' if child is last else '| '
+    def tree_lines(self):
+        yield self.name
+        last = self.children[-1] if self.children else None
+        for child in self.children:
+            prefix = '`-' if child is last else '+-'
+            for line in child.tree_lines():
+                yield prefix + line
+                prefix = '  ' if child is last else '| '
 
 class Kvasir(object):
     def __init__(self):
@@ -181,12 +181,29 @@ class Kvasir(object):
                 title = info[u'Title'] if u'Title' in info else unicode(os.path.basename(d))
                 author = info[u'Author'] if u'Author' in info else u'Unknown'
                 self.__writer.add_document(title=title, author=author,
-                    content=text, path=pdf.filename, type=u'article')
+                    content=text, type=u'article',
+                    path=os.path.relpath(pdf.filename, self.__doc_path))
                 self.__writer.commit()
+
     def list(self):
+        root = Tree('doc')
         with self.__index.searcher() as s:
             for fields in s.all_stored_fields():
-                yield fields['path']
+                node = root
+                for p in fields['path'].split('/'):
+                    found = False
+                    for n in root.children:
+                        if n.name == p:
+                            node = n
+                            found = True
+                            break
+                    if not found:
+                        new_node = Tree(p)
+                        node.children.append(new_node)
+                        node = new_node
+                node.name = fields['title'] + ' [' + node.name + ']'
+        return root.tree_lines()
+
     def search(self, qs):
         qp = QueryParser("content", schema=self.__index.schema)
         q = qp.parse(qs)
