@@ -35,6 +35,7 @@ import whoosh.index as index
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
 
+import mendeley_client as mendeley
 
 def has_command(cmd):
     devnull = os.open(os.devnull, os.O_RDWR)
@@ -149,9 +150,10 @@ class Kvasir(object):
             url=STORED,
             volume=STORED,
             year=NUMERIC,
+            links=STORED,
             keywords=KEYWORD(scorable=True),
             unpublished=BOOLEAN)
-        # create the index
+        # create or load the index
         self.__index_path = self.__config_path + os.sep + 'index'
         if os.path.exists(self.__index_path):
             try:
@@ -162,7 +164,13 @@ class Kvasir(object):
             os.mkdir(self.__index_path)
             self.__index = index.create_in(self.__index_path, self.__schema)
         self.__writer = self.__index.writer()
+
     def add(self, documents):
+        # deal with a citation
+        if len(d) == 0:
+            self.__state['current_filename'] = "$CITATION"
+            return
+        # deal with pdfs
         for d in documents:
             try:
                 index = int(d)
@@ -204,26 +212,31 @@ class Kvasir(object):
                 node.name = fields['title'] + ' [' + node.name + ']'
         return root.tree_lines()
 
-    def search(self, qs):
-        qp = QueryParser("content", schema=self.__index.schema)
-        q = qp.parse(qs)
+    def search(self, qs, local=False):
+        if local:
+            qp = QueryParser("content", schema=self.__index.schema)
+            q = qp.parse(qs)
 
-        with self.__index.searcher() as s:
-            results = s.search(q)
-            for r in results:
-                print r
-        return results
+            with self.__index.searcher() as s:
+                results = s.search(q)
+                for r in results:
+                    print r
+            return results
+        else:
+            m = mendeley.create_client()
+            print m.search(qs, items=10)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
     subparsers = parser.add_subparsers()
     add_action = subparsers.add_parser('add', help='add documents from file')
-    add_action.add_argument('items', metavar='P', type=str, nargs='+',
+    add_action.add_argument('items', metavar='P', type=str, nargs='*',
             help='list of items to add')
-    add_action.add_argument('-r', '--recursive', action='store_true', help='recursively add documents in path with extension ps or pdf')
+    #add_action.add_argument('-r', '--recursive', action='store_true', help='recursively add documents in path with extension ps or pdf')
     add_action.set_defaults(which='add')
 
     tag_action = subparsers.add_parser('tag', help='tag details of the document')
+    tag_action.add_argument('item', metavar='I', type=str, nargs='?', help='path or index to tag')
     tag_action.add_argument('-t', '--title', action='store_const', const=str, default='', help='title metadata')
     tag_action.add_argument('-a', '--author', action='store_const', const=str, default='', help='author metadata')
     tag_action.set_defaults(which='tag')
@@ -231,11 +244,14 @@ if __name__ == "__main__":
     remove_action = subparsers.add_parser('remove', help='remove local documents from previous search')
     remove_action.set_defaults(which='remove')
 
-    search_action = subparsers.add_parser('search', help='search the web for documents')
+    search_action = subparsers.add_parser('search', help='search the locally/web for documents')
+    search_action.add_argument('query', metavar='Q', type=str, nargs='+', help='search terms')
+    search_action.add_argument('-l', '--local', action='store_true', help='search locally rather than on the web')
     search_action.set_defaults(which='search')
 
     list_action = subparsers.add_parser('list', help='print out information')
     list_action.add_argument('-s', '--search', action='store_true', help='print last search result')
+    list_action.add_argument('-t', '--tree', action='store_true', help='print out tree of all indexed files')
     list_action.set_defaults(which='list')
 
     args = parser.parse_args()
@@ -246,5 +262,7 @@ if __name__ == "__main__":
     elif args.which == 'list':
         for l in k.list():
             print l
+    elif args.which == 'search':
+        k.search(' '.join(args.query), args.local)
     else:
         sys.exit('error: unknown action ' + args.which)
