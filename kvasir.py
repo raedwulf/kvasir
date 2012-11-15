@@ -212,19 +212,19 @@ class Kvasir(object):
                 node.name = fields['title'] + ' [' + node.name + ']'
         return root.tree_lines()
 
-    def search(self, qs, local=False):
+    def search(self, qs, local=False, count=10):
         if local:
             qp = QueryParser("content", schema=self.__index.schema)
             q = qp.parse(qs)
 
             with self.__index.searcher() as s:
-                results = s.search(q)
+                results = s.search(q, limit=count)
                 for r in results:
                     print r
             return results
         else:
             m = mendeley.create_client()
-            print m.search(qs, items=10)
+            return m.search(qs, items=count)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
@@ -247,6 +247,7 @@ if __name__ == "__main__":
     search_action = subparsers.add_parser('search', help='search the locally/web for documents')
     search_action.add_argument('query', metavar='Q', type=str, nargs='+', help='search terms')
     search_action.add_argument('-l', '--local', action='store_true', help='search locally rather than on the web')
+    search_action.add_argument('-c', '--count', action='store_const', type=int, default=10, help='how many search results to return')
     search_action.set_defaults(which='search')
 
     list_action = subparsers.add_parser('list', help='print out information')
@@ -263,6 +264,6 @@ if __name__ == "__main__":
         for l in k.list():
             print l
     elif args.which == 'search':
-        k.search(' '.join(args.query), args.local)
+        k.search(' '.join(args.query), args.local, args.count)
     else:
         sys.exit('error: unknown action ' + args.which)
