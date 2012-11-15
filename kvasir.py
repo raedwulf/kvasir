@@ -61,9 +61,11 @@ class PDF(object):
                 v = lstrip(v)
                 result[unicode(f, 'utf-8')] = unicode(v, 'utf-8')
         return result
-    def text(self):
-        data = subprocess.check_output(['pdftotext', '-enc', 'UTF-8', self.filename, '-'],
-            stderr=subprocess.STDOUT)
+    def text(self, first=1, last=-1):
+        first = ['-f', str(first)]
+        last = ['-l', str(last)] if last > 0 else []
+        cmd = ['pdftotext', '-enc', 'UTF-8'] + first + last + [self.filename, '-']
+        data = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return unicode(data, 'utf-8')
 
 class State(object):
@@ -237,8 +239,8 @@ if __name__ == "__main__":
 
     tag_action = subparsers.add_parser('tag', help='tag details of the document')
     tag_action.add_argument('item', metavar='I', type=str, nargs='?', help='path or index to tag')
-    tag_action.add_argument('-t', '--title', action='store_const', const=str, default='', help='title metadata')
-    tag_action.add_argument('-a', '--author', action='store_const', const=str, default='', help='author metadata')
+    tag_action.add_argument('-t', '--title', type=str, default='', help='title metadata')
+    tag_action.add_argument('-a', '--author', type=str, default='', help='author metadata')
     tag_action.set_defaults(which='tag')
 
     remove_action = subparsers.add_parser('remove', help='remove local documents from previous search')
@@ -247,7 +249,7 @@ if __name__ == "__main__":
     search_action = subparsers.add_parser('search', help='search the locally/web for documents')
     search_action.add_argument('query', metavar='Q', type=str, nargs='+', help='search terms')
     search_action.add_argument('-l', '--local', action='store_true', help='search locally rather than on the web')
-    search_action.add_argument('-c', '--count', action='store_const', type=int, default=10, help='how many search results to return')
+    search_action.add_argument('-c', '--count', type=int, default=10, help='how many search results to return')
     search_action.set_defaults(which='search')
 
     list_action = subparsers.add_parser('list', help='print out information')
@@ -264,6 +266,6 @@ if __name__ == "__main__":
         for l in k.list():
             print l
     elif args.which == 'search':
-        k.search(' '.join(args.query), args.local, args.count)
+        print k.search(' '.join(args.query), args.local, args.count)
     else:
         sys.exit('error: unknown action ' + args.which)
