@@ -169,7 +169,7 @@ class Kvasir(object):
 
     def add(self, documents):
         # deal with a citation
-        if len(d) == 0:
+        if len(documents) == 0:
             self.__state['current_filename'] = "$CITATION"
             return
         # deal with pdfs
