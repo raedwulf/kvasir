@@ -27,11 +27,12 @@ import sys
 import shutil
 import subprocess
 import tempfile
+import jellyfish
 from ConfigParser import ConfigParser
 from HTMLParser import HTMLParser
 from string import lstrip, split, punctuation, maketrans
 
-from nltk.corpus import wordnet
+from nltk.corpus import wordnet, stopwords
 import whoosh.index as index
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
@@ -52,19 +53,20 @@ def title_score(text):
     score = 0.0
     text = text.encode('ascii')
     punc2whitespace = maketrans(punctuation, ' ' * len(punctuation))
-    words = text.translate(punc2whitespace).split()
+    ws = text.translate(punc2whitespace).split()
     # must start with capital letter
-    if len(words) == 0 or len(words[0]) == 0 or not words[0][0].isupper():
+    if len(ws) == 0 or len(ws[0]) == 0 or not ws[0][0].isupper():
         return 0
-    for word in words:
+    for word in ws:
         synset = wordnet.synsets(word)
-        score += 1.0 if len(synset) > 0 else 0.0
+        score += 1.0 if len(synset) > 0 or word in stopwords.words() else 0.0
+
         #score += 0.5 if word[0].isupper() else 0.0
         #sp = spelling(word.lower())
         #if len(sp):
             #score += sp[0][1]
             #print word, sp[0]
-    score /= len(words)
+    score /= len(ws)
     return score
 
 class BBoxHTMLParser(HTMLParser):
@@ -73,7 +75,11 @@ class BBoxHTMLParser(HTMLParser):
         self.point = []
         self.data = []
         self.lang = []
+        self.lines = []
+        self.line_index = []
         self.wc = 0
+        self.line = 0
+        self.ymin = 0
     def handle_starttag(self, tag, attrs):
         if tag == 'word':
             self.inword = True
@@ -83,7 +89,11 @@ class BBoxHTMLParser(HTMLParser):
                 elif attr[0] == 'ymin': ymin = float(attr[1])
                 elif attr[0] == 'xmax': xmax = float(attr[1])
                 elif attr[0] == 'ymax': ymax = float(attr[1])
-            self.dim = ((xmax - xmin), (ymax - ymin), ymin)
+            if self.ymin != ymin:
+                self.line += 1
+                self.lines.append([])
+                self.ymin = ymin
+            self.dim = ((xmax - xmin), (ymax - ymin), ymin, ymax)
             self.wc += 1
     def handle_endtag(self, tag):
         if tag == 'word':
@@ -99,10 +109,12 @@ class BBoxHTMLParser(HTMLParser):
                     wpl += 1
                 self.point[i].append(score/wpl)
     def handle_data(self, data):
-        if self.inword and self.wc < 50:
+        if self.inword and self.wc < 40:
             self.lang.append(len(wordnet.synsets(data)) > 0)
             self.point.append([(self.dim[0] / len(data)), self.dim[1], self.dim[2]])
             #self.point.append([(self.dim[0] / len(data)), self.dim[1]])
+            self.line_index.append(self.line)
+            self.lines[self.line-1].append(data)
             self.data.append(data)
 
 class PDF(object):
@@ -148,6 +160,7 @@ class PDF(object):
         return ' '.join([a for (a,b) in zip(data, idx) if b == num])
     def cluster_title2(self, points, data, centroids=3, limit=10):
         result = []
+        print points
         #old_settings = np.seterr(all='ignore')
         for i in range(0, limit):
             title = self.cluster_title(points, data, centroids)
@@ -155,8 +168,11 @@ class PDF(object):
                 score = title_score(title)
                 result.append((title, score))
         #np.seterr(old_settings)
+        result = sorted(set(result), key=lambda s: s[1], reverse=True)
         print result
-        return max(set(result), key=lambda s: s[1])
+        result = [(a,b) for (a,b) in result if b == result[0][1]]
+        print result
+        return max(result, key=lambda s: len(s[0]))
     def title(self):
         assert os.path.exists(self.filename), "error: what happened to the file!"
         filename = tempfile.mktemp()
