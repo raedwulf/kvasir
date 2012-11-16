@@ -29,14 +29,14 @@ import subprocess
 import tempfile
 from ConfigParser import ConfigParser
 from HTMLParser import HTMLParser
-from string import lstrip, split
+from string import lstrip, split, punctuation, maketrans
 
-from pattern.en import wordnet
+from nltk.corpus import wordnet
 import whoosh.index as index
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
 
-import numpy
+import numpy as np
 from scipy.cluster.vq import kmeans2, whiten
 
 import latex
@@ -47,6 +47,25 @@ def has_command(cmd):
     subprocess.check_call('which ' + cmd + ' && exit 0', stdout=devnull,
         stderr=devnull, shell=True) == 0, 'pdftotext command not available'
     os.close(devnull)
+
+def title_score(text):
+    score = 0.0
+    text = text.encode('ascii')
+    punc2whitespace = maketrans(punctuation, ' ' * len(punctuation))
+    words = text.translate(punc2whitespace).split()
+    # must start with capital letter
+    if len(words) == 0 or len(words[0]) == 0 or not words[0][0].isupper():
+        return 0
+    for word in words:
+        synset = wordnet.synsets(word)
+        score += 1.0 if len(synset) > 0 else 0.0
+        #score += 0.5 if word[0].isupper() else 0.0
+        #sp = spelling(word.lower())
+        #if len(sp):
+            #score += sp[0][1]
+            #print word, sp[0]
+    score /= len(words)
+    return score
 
 class BBoxHTMLParser(HTMLParser):
     def handle_decl(self, decl):
@@ -64,7 +83,7 @@ class BBoxHTMLParser(HTMLParser):
                 elif attr[0] == 'ymin': ymin = float(attr[1])
                 elif attr[0] == 'xmax': xmax = float(attr[1])
                 elif attr[0] == 'ymax': ymax = float(attr[1])
-            self.dim = ((xmax - xmin), (ymax - ymin), xmin, ymin)
+            self.dim = ((xmax - xmin), (ymax - ymin), ymin)
             self.wc += 1
     def handle_endtag(self, tag):
         if tag == 'word':
@@ -73,17 +92,17 @@ class BBoxHTMLParser(HTMLParser):
             for i in range(0, len(self.point)):
                 score = 0.0
                 wpl = 0
-                for j in range(i+5, i-5, -1):
-                    if j >= 0 and j < len(self.lang) and self.point[i][3] == self.point[j][3]:
+                for j in range(i+5, i-6, -1):
+                    if j >= 0 and j < len(self.lang) and self.point[i][2] == self.point[j][2]:
                         score += 1.0 / (abs(j-i)+1.0) if self.lang[j] else 0.0
                         #score += 1.0
                     wpl += 1
                 self.point[i].append(score/wpl)
-                #self.point[i].append(wpl)
     def handle_data(self, data):
         if self.inword and self.wc < 50:
             self.lang.append(len(wordnet.synsets(data)) > 0)
-            self.point.append([self.dim[0] / len(data), self.dim[1], self.dim[2], self.dim[3]])
+            self.point.append([(self.dim[0] / len(data)), self.dim[1], self.dim[2]])
+            #self.point.append([(self.dim[0] / len(data)), self.dim[1]])
             self.data.append(data)
 
 class PDF(object):
@@ -110,23 +129,34 @@ class PDF(object):
         cmd = ['pdftotext', '-enc', 'UTF-8'] + first + last + [self.filename, '-']
         data = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return unicode(data, 'utf-8')
-    def cluster_title(self, points, data):
-        res, idx = kmeans2(whiten(points), 3)
+    def cluster_title(self, points, data, centroids=3):
+        res, idx = kmeans2(whiten(points), centroids)
         #print res, idx
         #print zip(b.data, idx)
 
-        size = [0] * 3
-        count = [0] * 3
+        size = [0] * len(res)
+        count = [0] * len(res)
         avg = []
-        for i in range(0, 3):
+        for i in range(0, len(res)):
             for a,b in zip(points,idx):
                 if i == b:
                     size[i] += a[0]
                     count[i] += 1
-            avg.append(float(size[i]) / float(count[i]))
+            if count[i] > 0:
+                avg.append(float(size[i]) / float(count[i]))
         num = avg.index(max(avg))
         return ' '.join([a for (a,b) in zip(data, idx) if b == num])
-
+    def cluster_title2(self, points, data, centroids=3, limit=10):
+        result = []
+        #old_settings = np.seterr(all='ignore')
+        for i in range(0, limit):
+            title = self.cluster_title(points, data, centroids)
+            if title not in result:
+                score = title_score(title)
+                result.append((title, score))
+        #np.seterr(old_settings)
+        #print result
+        return max(set(result), key=lambda s: s[1])
     def title(self):
         assert os.path.exists(self.filename), "error: what happened to the file!"
         filename = tempfile.mktemp()
@@ -138,7 +168,7 @@ class PDF(object):
         f.close()
         bp = BBoxHTMLParser()
         bp.feed(text)
-        return self.cluster_title(bp.point, bp.data)
+        return self.cluster_title2(bp.point, bp.data, 6, 10)
 
 class State(object):
     def __init__(self, filename):
