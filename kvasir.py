@@ -155,7 +155,7 @@ class PDF(object):
                 score = title_score(title)
                 result.append((title, score))
         #np.seterr(old_settings)
-        #print result
+        print result
         return max(set(result), key=lambda s: s[1])
     def title(self):
         assert os.path.exists(self.filename), "error: what happened to the file!"
@@ -168,7 +168,7 @@ class PDF(object):
         f.close()
         bp = BBoxHTMLParser()
         bp.feed(text)
-        return self.cluster_title2(bp.point, bp.data, 6, 10)
+        return self.cluster_title2(bp.point, bp.data, 3, 10)
 
 class State(object):
     def __init__(self, filename):
