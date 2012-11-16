@@ -20,21 +20,26 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-#import pattern
 import argparse
 import exceptions
 import os
 import sys
-import latex
 import shutil
 import subprocess
-import ConfigParser
+import tempfile
+from ConfigParser import ConfigParser
+from HTMLParser import HTMLParser
 from string import lstrip, split
 
+from pattern.en import wordnet
 import whoosh.index as index
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
 
+import numpy
+from scipy.cluster.vq import kmeans2, whiten
+
+import latex
 import mendeley_client as mendeley
 
 def has_command(cmd):
@@ -42,6 +47,44 @@ def has_command(cmd):
     subprocess.check_call('which ' + cmd + ' && exit 0', stdout=devnull,
         stderr=devnull, shell=True) == 0, 'pdftotext command not available'
     os.close(devnull)
+
+class BBoxHTMLParser(HTMLParser):
+    def handle_decl(self, decl):
+        self.inword = False
+        self.point = []
+        self.data = []
+        self.lang = []
+        self.wc = 0
+    def handle_starttag(self, tag, attrs):
+        if tag == 'word':
+            self.inword = True
+            xmin = ymin = xmax = ymax = 0
+            for attr in attrs:
+                if attr[0] == 'xmin': xmin = float(attr[1])
+                elif attr[0] == 'ymin': ymin = float(attr[1])
+                elif attr[0] == 'xmax': xmax = float(attr[1])
+                elif attr[0] == 'ymax': ymax = float(attr[1])
+            self.dim = ((xmax - xmin), (ymax - ymin), xmin, ymin)
+            self.wc += 1
+    def handle_endtag(self, tag):
+        if tag == 'word':
+            self.inword = False
+        elif tag == 'html':
+            for i in range(0, len(self.point)):
+                score = 0.0
+                wpl = 0
+                for j in range(i+5, i-5, -1):
+                    if j >= 0 and j < len(self.lang) and self.point[i][3] == self.point[j][3]:
+                        score += 1.0 / (abs(j-i)+1.0) if self.lang[j] else 0.0
+                        #score += 1.0
+                    wpl += 1
+                self.point[i].append(score/wpl)
+                #self.point[i].append(wpl)
+    def handle_data(self, data):
+        if self.inword and self.wc < 50:
+            self.lang.append(len(wordnet.synsets(data)) > 0)
+            self.point.append([self.dim[0] / len(data), self.dim[1], self.dim[2], self.dim[3]])
+            self.data.append(data)
 
 class PDF(object):
     def __init__(self, filename):
@@ -67,10 +110,39 @@ class PDF(object):
         cmd = ['pdftotext', '-enc', 'UTF-8'] + first + last + [self.filename, '-']
         data = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return unicode(data, 'utf-8')
+    def cluster_title(self, points, data):
+        res, idx = kmeans2(whiten(points), 3)
+        #print res, idx
+        #print zip(b.data, idx)
+
+        size = [0] * 3
+        count = [0] * 3
+        avg = []
+        for i in range(0, 3):
+            for a,b in zip(points,idx):
+                if i == b:
+                    size[i] += a[0]
+                    count[i] += 1
+            avg.append(float(size[i]) / float(count[i]))
+        num = avg.index(max(avg))
+        return ' '.join([a for (a,b) in zip(data, idx) if b == num])
+
+    def title(self):
+        assert os.path.exists(self.filename), "error: what happened to the file!"
+        filename = tempfile.mktemp()
+        subprocess.check_call(
+            'pdftotext -enc UTF-8 -bbox -l 1 "' + self.filename + '" '
+            + filename, shell=True)
+        f = open(filename, 'rb')
+        text = unicode(''.join(f.readlines()), 'utf-8')
+        f.close()
+        bp = BBoxHTMLParser()
+        bp.feed(text)
+        return self.cluster_title(bp.point, bp.data)
 
 class State(object):
     def __init__(self, filename):
-        self.config = ConfigParser.ConfigParser()
+        self.config = ConfigParser()
         self.filename = filename
         self.__read_config()
     def __read_config(self):
@@ -188,6 +260,7 @@ class Kvasir(object):
                 self.__state['current_filename'] = filename
                 info = pdf.info()
                 text = pdf.text()
+                print pdf.title()
                 title = info[u'Title'] if u'Title' in info else unicode(os.path.basename(d))
                 author = info[u'Author'] if u'Author' in info else u'Unknown'
                 self.__writer.add_document(title=title, author=author,
