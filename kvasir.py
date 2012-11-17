@@ -184,7 +184,7 @@ class PDF(object):
         f.close()
         bp = BBoxHTMLParser()
         bp.feed(text)
-        return self.cluster_title2(bp.point, bp.data, 3, 10)
+        return self.cluster_title2(bp.point, bp.data, 3, 20)
 
 class State(object):
     def __init__(self, filename):
