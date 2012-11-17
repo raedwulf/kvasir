@@ -148,7 +148,7 @@ class PDF(object):
         # find the most-english longest result
         result = sorted(set(result), key=lambda s: s[1], reverse=True)
         result = [(a,b) for (a,b) in result if b == result[0][1]]
-        return max(result, key=lambda s: len(s[0]))
+        return max(result, key=lambda s: len(s[0]))[0]
     def title(self):
         assert os.path.exists(self.filename), "error: what happened to the file!"
         filename = tempfile.mktemp()
