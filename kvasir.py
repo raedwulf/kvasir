@@ -27,7 +27,9 @@ import sys
 import shutil
 import subprocess
 import tempfile
-import jellyfish
+import hashlib
+import datetime
+import warnings
 from ConfigParser import ConfigParser
 from HTMLParser import HTMLParser
 from string import lstrip, split, punctuation, maketrans
@@ -36,6 +38,7 @@ from nltk.corpus import wordnet, stopwords
 import whoosh.index as index
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
+import jellyfish
 
 import numpy as np
 from scipy.cluster.vq import kmeans2, whiten
@@ -143,9 +146,6 @@ class PDF(object):
         return unicode(data, 'utf-8')
     def cluster_title(self, points, data, centroids=3):
         res, idx = kmeans2(whiten(points), centroids)
-        #print res, idx
-        #print zip(b.data, idx)
-
         size = [0] * len(res)
         count = [0] * len(res)
         avg = []
@@ -160,18 +160,17 @@ class PDF(object):
         return ' '.join([a for (a,b) in zip(data, idx) if b == num])
     def cluster_title2(self, points, data, centroids=3, limit=10):
         result = []
-        print points
-        #old_settings = np.seterr(all='ignore')
-        for i in range(0, limit):
-            title = self.cluster_title(points, data, centroids)
-            if title not in result:
-                score = title_score(title)
-                result.append((title, score))
-        #np.seterr(old_settings)
+        # disable user warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for i in range(0, limit):
+                title = self.cluster_title(points, data, centroids)
+                if title not in result:
+                    score = title_score(title)
+                    result.append((title, score))
+        # find the most-english longest result
         result = sorted(set(result), key=lambda s: s[1], reverse=True)
-        print result
         result = [(a,b) for (a,b) in result if b == result[0][1]]
-        print result
         return max(result, key=lambda s: len(s[0]))
     def title(self):
         assert os.path.exists(self.filename), "error: what happened to the file!"
@@ -179,12 +178,20 @@ class PDF(object):
         subprocess.check_call(
             'pdftotext -enc UTF-8 -bbox -l 1 "' + self.filename + '" '
             + filename, shell=True)
-        f = open(filename, 'rb')
-        text = unicode(''.join(f.readlines()), 'utf-8')
-        f.close()
+        with open(filename, 'rb') as f:
+            text = unicode(''.join(f.readlines()), 'utf-8')
         bp = BBoxHTMLParser()
         bp.feed(text)
         return self.cluster_title2(bp.point, bp.data, 3, 20)
+    def md5sum(self):
+        m = hashlib.md5()
+        with open(self.filename, 'rb') as f:
+            while True:
+                data = f.read(128)
+                if not data:
+                    break
+                m.update(data)
+        return m.digest()
 
 class State(object):
     def __init__(self, filename):
@@ -246,6 +253,8 @@ class Kvasir(object):
         # create whoosh's schema (basically bibtex fields)
         self.__schema = Schema(
             entry=STORED,
+            added=DATETIME(stored=True),
+            modified=DATETIME(stored=True),
             title=TEXT(stored=True),
             path=ID(stored=True),
             content=TEXT,
@@ -270,8 +279,9 @@ class Kvasir(object):
             url=STORED,
             volume=STORED,
             year=NUMERIC,
-            links=STORED,
-            keywords=KEYWORD(scorable=True),
+            links=KEYWORD(stored=True, lowercase=True, commas=True, scorable=True),
+            md5sum=STORED,
+            keywords=KEYWORD(scorable=True, commas=True),
             unpublished=BOOLEAN)
         # create or load the index
         self.__index_path = self.__config_path + os.sep + 'index'
@@ -310,7 +320,8 @@ class Kvasir(object):
                 title = info[u'Title'] if u'Title' in info else unicode(os.path.basename(d))
                 author = info[u'Author'] if u'Author' in info else u'Unknown'
                 self.__writer.add_document(title=title, author=author,
-                    content=text, type=u'article',
+                    content=text, type=u'article', md5sum=pdf.md5sum(),
+                    added=datetime.datetime.utcnow(), modified=datetime.datetime.utcnow(),
                     path=os.path.relpath(pdf.filename, self.__doc_path))
                 self.__writer.commit()
 
