@@ -35,7 +35,7 @@ import jellyfish
 
 import latex
 import mendeley_client as mendeley
-from content.pdf import PDF
+from content.pdf import PDF, title_score
 
 class State(object):
     def __init__(self, filename):
@@ -112,7 +112,7 @@ class Kvasir(object):
             institution=STORED,
             journal=TEXT(stored=True),
             month=STORED,
-            note=TEXT(stored=True),
+            notes=TEXT(stored=True),
             number=STORED,
             organization=STORED,
             pages=STORED,
@@ -138,6 +138,8 @@ class Kvasir(object):
             os.mkdir(self.__index_path)
             self.__index = index.create_in(self.__index_path, self.__schema)
         self.__writer = self.__index.writer()
+        # create a mendeley client
+        self.mendeley = mendeley.create_client()
 
     def add(self, documents):
         # deal with a citation
@@ -160,14 +162,24 @@ class Kvasir(object):
                 self.__state['current_filename'] = filename
                 info = pdf.info()
                 text = pdf.text()
-                print pdf.title()
-                title = info[u'Title'] if u'Title' in info else unicode(os.path.basename(d))
+                # find an appropriate title
+                title = pdf.title()
+                title_score0 = title_score(title)
+                if u'Title' in info:
+                    title_score1 = title_score(info[u'Title'])
+                    if title_score1 >= title_score0:
+                        title = info[u'Title']
                 author = info[u'Author'] if u'Author' in info else u'Unknown'
+                # search on mendeley for matching titles
+                results = self.search('title:' + title, count=10)
+                print results
+
                 self.__writer.add_document(title=title, author=author,
                     content=text, type=u'article', md5sum=pdf.md5sum(),
                     added=datetime.datetime.utcnow(), modified=datetime.datetime.utcnow(),
                     path=os.path.relpath(pdf.filename, self.__doc_path))
                 self.__writer.commit()
+                print title, 'by', author, 'added.'
 
     def list(self):
         root = Tree('doc')
@@ -199,8 +211,7 @@ class Kvasir(object):
                     print r
             return results
         else:
-            m = mendeley.create_client()
-            return m.search(qs, items=count)
+            return self.mendeley.search(qs, items=count)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bibliography manager.')
